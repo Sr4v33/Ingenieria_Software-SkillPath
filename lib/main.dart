@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'dart:async';
 
 void main() {
   runApp(SkillsPathApp());
@@ -25,20 +28,25 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  int _selectedIndex = 1; // Start with Home selected
+  int _selectedIndex = 1; // Iniciar con Home seleccionado
   final ProgressManager _progressManager = ProgressManager();
 
-  final List<Widget> _screens = [
-    JobsScreen(),
-    HomeScreen(),
-    LeaderboardScreen(),
-    ProfileScreen(),
-  ];
+  // Se necesita un método para pasar el progressManager a las pantallas
+  List<Widget> _screens() {
+    return [
+      JobsScreen(),
+      HomeScreen(progressManager: _progressManager),
+      LeaderboardScreen(progressManager: _progressManager),
+      ProfileScreen(progressManager: _progressManager),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
+    final screens = _screens();
+
     return Scaffold(
-      body: _screens[_selectedIndex],
+      body: screens[_selectedIndex],
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           boxShadow: [
@@ -63,22 +71,22 @@ class _MainScreenState extends State<MainScreen> {
             BottomNavigationBarItem(
               icon: Icon(Icons.work_outline),
               activeIcon: Icon(Icons.work),
-              label: 'Jobs',
+              label: 'Empleos',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.home_outlined),
               activeIcon: Icon(Icons.home),
-              label: 'Home',
+              label: 'Inicio',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.emoji_events_outlined),
               activeIcon: Icon(Icons.emoji_events),
-              label: 'Leaderboard',
+              label: 'Ranking',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_outline),
               activeIcon: Icon(Icons.person),
-              label: 'Profile',
+              label: 'Perfil',
             ),
           ],
         ),
@@ -86,6 +94,8 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 }
+
+// --- Modelos de Datos y Lógica de Negocio ---
 
 // Enumeraciones para los estados de los nodos
 enum NodeStatus {
@@ -95,46 +105,87 @@ enum NodeStatus {
   first      // Primer nodo (bombilla)
 }
 
-// Modelo para los nodos del camino
+// Sistema de puntuación
+class ScoreSystem {
+  static const int QUIZ_COMPLETION_POINTS = 50;
+  static const int CONTENT_READING_POINTS = 20;
+  static const int STREAK_BONUS_POINTS = 10;
+  static const int NODE_COMPLETION_POINTS = 100;
+
+  static int calculateQuizScore(int correctAnswers, int totalQuestions) {
+    double percentage = correctAnswers / totalQuestions;
+    return (QUIZ_COMPLETION_POINTS * percentage).round();
+  }
+}
+
+// Modelo para contenido educativo
+class EducationalContent {
+  final String title;
+  final String content;
+  final List<String> keyPoints;
+  final String videoUrl;
+
+  EducationalContent({
+    required this.title,
+    required this.content,
+    required this.keyPoints,
+    this.videoUrl = '',
+  });
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'content': content,
+    'keyPoints': keyPoints,
+    'videoUrl': videoUrl,
+  };
+
+  factory EducationalContent.fromJson(Map<String, dynamic> json) => EducationalContent(
+    title: json['title'],
+    content: json['content'],
+    keyPoints: List<String>.from(json['keyPoints']),
+    videoUrl: json['videoUrl'] ?? '',
+  );
+}
+
+// Modelo mejorado para los nodos del camino
 class PathNode {
   final int id;
   final String title;
   final String description;
   final List<QuizQuestion> questions;
+  final EducationalContent educationalContent;
   NodeStatus status;
+  bool contentViewed;
+  int? lastQuizScore;
+  DateTime? completedAt;
 
   PathNode({
     required this.id,
     required this.title,
     required this.description,
     required this.questions,
+    required this.educationalContent,
     required this.status,
+    this.contentViewed = false,
+    this.lastQuizScore,
+    this.completedAt,
   });
 
-  // Obtener el ícono según el estado
   IconData get icon {
     switch (status) {
-      case NodeStatus.first:
-        return Icons.lightbulb;
-      case NodeStatus.active:
-        return Icons.flag;
-      case NodeStatus.completed:
-        return Icons.check;
-      case NodeStatus.locked:
-        return Icons.lock;
+      case NodeStatus.first: return Icons.lightbulb;
+      case NodeStatus.active: return Icons.flag;
+      case NodeStatus.completed: return Icons.check;
+      case NodeStatus.locked: return Icons.lock;
     }
   }
 
-  // Obtener color según el estado
   Color get backgroundColor {
     switch (status) {
       case NodeStatus.first:
-      case NodeStatus.active:
-        return Colors.blue[600]!;
-      case NodeStatus.completed:
-        return Colors.green[600]!;
-      case NodeStatus.locked:
-        return Colors.grey[400]!;
+      case NodeStatus.active: return Colors.blue[600]!;
+      case NodeStatus.completed: return Colors.green[600]!;
+      case NodeStatus.locked: return Colors.grey[400]!;
     }
   }
 
@@ -142,199 +193,320 @@ class PathNode {
     switch (status) {
       case NodeStatus.first:
       case NodeStatus.active:
-      case NodeStatus.completed:
-        return Colors.white;
-      case NodeStatus.locked:
-        return Colors.grey[600]!;
+      case NodeStatus.completed: return Colors.white;
+      case NodeStatus.locked: return Colors.grey[600]!;
     }
   }
 
-  // Verificar si el nodo es clickeable
-  bool get isClickable {
-    return status == NodeStatus.first ||
-        status == NodeStatus.active ||
-        status == NodeStatus.completed;
-  }
+  bool get isClickable => status != NodeStatus.locked;
+  bool get canTakeQuiz => contentViewed && (status == NodeStatus.first || status == NodeStatus.active);
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'title': title, 'description': description,
+    'questions': questions.map((q) => q.toJson()).toList(),
+    'educationalContent': educationalContent.toJson(),
+    'status': status.index, 'contentViewed': contentViewed,
+    'lastQuizScore': lastQuizScore,
+    'completedAt': completedAt?.millisecondsSinceEpoch,
+  };
+
+  factory PathNode.fromJson(Map<String, dynamic> json) => PathNode(
+    id: json['id'], title: json['title'], description: json['description'],
+    questions: (json['questions'] as List).map((q) => QuizQuestion.fromJson(q)).toList(),
+    educationalContent: EducationalContent.fromJson(json['educationalContent']),
+    status: NodeStatus.values[json['status']],
+    contentViewed: json['contentViewed'] ?? false,
+    lastQuizScore: json['lastQuizScore'],
+    completedAt: json['completedAt'] != null ? DateTime.fromMillisecondsSinceEpoch(json['completedAt']) : null,
+  );
 }
 
-// Modelo para las preguntas del quiz
+// Modelo mejorado para las preguntas del quiz
 class QuizQuestion {
   final String question;
   final List<String> options;
-  final int correctAnswer; // Índice de la respuesta correcta
+  final int correctAnswer;
+  final String explanation;
 
   QuizQuestion({
     required this.question,
     required this.options,
     required this.correctAnswer,
+    this.explanation = '',
   });
+
+  Map<String, dynamic> toJson() => {
+    'question': question, 'options': options,
+    'correctAnswer': correctAnswer, 'explanation': explanation,
+  };
+
+  factory QuizQuestion.fromJson(Map<String, dynamic> json) => QuizQuestion(
+    question: json['question'],
+    options: List<String>.from(json['options']),
+    correctAnswer: json['correctAnswer'],
+    explanation: json['explanation'] ?? '',
+  );
 }
 
-// Gestor de progreso del usuario
+// Modelo para estadísticas del usuario
+class UserStats {
+  int totalPoints;
+  int streak;
+  int totalNodesCompleted;
+  DateTime lastActivity;
+  Map<String, int> skillScores;
+
+  UserStats({
+    this.totalPoints = 0, this.streak = 0, this.totalNodesCompleted = 0,
+    DateTime? lastActivity, Map<String, int>? skillScores,
+  }) : this.lastActivity = lastActivity ?? DateTime.now(),
+        this.skillScores = skillScores ?? {};
+
+  Map<String, dynamic> toJson() => {
+    'totalPoints': totalPoints, 'streak': streak,
+    'totalNodesCompleted': totalNodesCompleted,
+    'lastActivity': lastActivity.millisecondsSinceEpoch,
+    'skillScores': skillScores,
+  };
+
+  factory UserStats.fromJson(Map<String, dynamic> json) => UserStats(
+    totalPoints: json['totalPoints'] ?? 0, streak: json['streak'] ?? 0,
+    totalNodesCompleted: json['totalNodesCompleted'] ?? 0,
+    lastActivity: json['lastActivity'] != null
+        ? DateTime.fromMillisecondsSinceEpoch(json['lastActivity'])
+        : DateTime.now(),
+    skillScores: Map<String, int>.from(json['skillScores'] ?? {}),
+  );
+}
+
+// Gestor de progreso del usuario con persistencia
 class ProgressManager {
   static final ProgressManager _instance = ProgressManager._internal();
   factory ProgressManager() => _instance;
   ProgressManager._internal();
 
   List<PathNode> _nodes = [];
+  UserStats _userStats = UserStats();
+  bool _isLoaded = false;
 
-  // Inicializar los nodos con datos de ejemplo
-  List<PathNode> get nodes {
-    if (_nodes.isEmpty) {
-      _initializeNodes();
+  List<PathNode> get nodes => _nodes;
+  UserStats get userStats => _userStats;
+
+  Future<void> _ensureLoaded() async {
+    if (!_isLoaded) {
+      await loadProgress();
     }
-    return _nodes;
+  }
+
+  Future<void> loadProgress() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nodesJson = prefs.getString('nodes');
+      if (nodesJson != null) {
+        final nodesList = jsonDecode(nodesJson) as List;
+        _nodes = nodesList.map((node) => PathNode.fromJson(node)).toList();
+      } else {
+        _initializeNodes();
+      }
+      final statsJson = prefs.getString('userStats');
+      if (statsJson != null) {
+        _userStats = UserStats.fromJson(jsonDecode(statsJson));
+      }
+    } catch (e) {
+      print('Error al cargar progreso: $e');
+      _initializeNodes();
+    } finally {
+      _isLoaded = true;
+    }
+  }
+
+  Future<void> saveProgress() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nodesJson = jsonEncode(_nodes.map((n) => n.toJson()).toList());
+      await prefs.setString('nodes', nodesJson);
+      final statsJson = jsonEncode(_userStats.toJson());
+      await prefs.setString('userStats', statsJson);
+    } catch (e) {
+      print('Error al guardar progreso: $e');
+    }
   }
 
   void _initializeNodes() {
     _nodes = [
       PathNode(
-        id: 1,
-        title: "Introducción",
-        description: "Aprende los fundamentos de las habilidades blandas y su importancia en el entorno laboral.",
+        id: 1, title: "Introducción",
+        description: "Aprende los fundamentos de las habilidades blandas y su importancia.",
         status: NodeStatus.first,
+        educationalContent: EducationalContent(
+          title: "Fundamentos de Habilidades Blandas",
+          content: "Las habilidades blandas son competencias interpersonales, sociales y emocionales que determinan cómo nos relacionamos. A diferencia de las habilidades técnicas, son transferibles y aplicables en cualquier industria. Incluyen comunicación, trabajo en equipo, liderazgo, y son tan importantes como las habilidades técnicas.",
+          keyPoints: ["Son competencias interpersonales", "Son transferibles", "Incluyen comunicación, liderazgo, etc.", "Son cruciales en el mundo laboral actual"],
+        ),
         questions: [
-          QuizQuestion(
-            question: "¿Cuál es la característica principal de las habilidades blandas?",
-            options: [
-              "Son habilidades técnicas específicas",
-              "Son habilidades interpersonales y de comunicación",
-              "Son conocimientos académicos",
-              "Son certificaciones profesionales"
-            ],
-            correctAnswer: 1,
-          ),
-          QuizQuestion(
-            question: "¿Por qué son importantes las habilidades blandas en el trabajo?",
-            options: [
-              "Solo para puestos gerenciales",
-              "Para mejorar la colaboración y productividad",
-              "No son importantes",
-              "Solo para trabajos de ventas"
-            ],
-            correctAnswer: 1,
-          ),
+          QuizQuestion(question: "¿Qué son las habilidades blandas?", options: ["Técnicas", "Interpersonales", "Académicas", "Certificaciones"], correctAnswer: 1, explanation: "Se centran en la interacción humana."),
+          QuizQuestion(question: "¿Por qué son importantes?", options: ["Solo para gerentes", "Mejoran colaboración y productividad", "No son importantes", "Solo para ventas"], correctAnswer: 1, explanation: "Son esenciales para cualquier rol."),
         ],
       ),
       PathNode(
-        id: 2,
-        title: "Comunicación Efectiva",
-        description: "Desarrolla habilidades de comunicación clara, asertiva y empática.",
+        id: 2, title: "Comunicación Efectiva",
+        description: "Desarrolla comunicación clara, asertiva y empática.",
         status: NodeStatus.locked,
+        educationalContent: EducationalContent(
+          title: "Comunicación Efectiva en el Trabajo",
+          content: "La comunicación efectiva es la base de las relaciones profesionales exitosas. Implica transmitir ideas claramente, escuchar activamente y adaptar el mensaje a la audiencia. La escucha activa, la comunicación asertiva y el feedback constructivo son claves.",
+          keyPoints: ["Va más allá de hablar", "La escucha activa es fundamental", "La comunicación asertiva es clave", "El feedback constructivo fomenta el crecimiento"],
+        ),
         questions: [
-          QuizQuestion(
-            question: "¿Qué es la escucha activa?",
-            options: [
-              "Escuchar mientras haces otras tareas",
-              "Prestar atención completa y responder apropiadamente",
-              "Interrumpir frecuentemente",
-              "Solo escuchar las ideas principales"
-            ],
-            correctAnswer: 1,
-          ),
-          QuizQuestion(
-            question: "¿Cuál es una característica de la comunicación asertiva?",
-            options: [
-              "Ser agresivo para obtener lo que quieres",
-              "Evitar conflictos a toda costa",
-              "Expresar opiniones de manera respetuosa y directa",
-              "Nunca dar tu opinión"
-            ],
-            correctAnswer: 2,
-          ),
+          QuizQuestion(question: "¿Qué es la escucha activa?", options: ["Escuchar con distracciones", "Prestar atención completa", "Interrumpir", "Escuchar ideas principales"], correctAnswer: 1, explanation: "Requiere dedicar toda nuestra atención."),
+          QuizQuestion(question: "¿Qué es la comunicación asertiva?", options: ["Ser agresivo", "Evitar conflictos", "Expresar opiniones con respeto", "Nunca opinar"], correctAnswer: 2, explanation: "Permite expresar pensamientos de manera directa y respetuosa."),
         ],
       ),
       PathNode(
-        id: 3,
-        title: "Trabajo en Equipo",
-        description: "Aprende a colaborar efectivamente, resolver conflictos y contribuir al éxito grupal.",
+        id: 3, title: "Trabajo en Equipo",
+        description: "Aprende a colaborar, resolver conflictos y contribuir al éxito grupal.",
         status: NodeStatus.locked,
+        educationalContent: EducationalContent(
+          title: "Colaboración y Trabajo en Equipo",
+          content: "El trabajo en equipo efectivo implica colaboración genuina, comunicación abierta y un compromiso compartido con los objetivos del grupo. Roles claros, objetivos definidos y una buena resolución de conflictos son cruciales.",
+          keyPoints: ["Va más allá de trabajar juntos", "Roles y objetivos claros son esenciales", "Los conflictos deben ser constructivos", "La confianza mutua es la base"],
+        ),
         questions: [
-          QuizQuestion(
-            question: "¿Cuál es la clave del trabajo en equipo exitoso?",
-            options: [
-              "Competir con los compañeros",
-              "Trabajar solo para evitar conflictos",
-              "Comunicación abierta y objetivos compartidos",
-              "Dejar que una persona tome todas las decisiones"
-            ],
-            correctAnswer: 2,
-          ),
+          QuizQuestion(question: "¿Cuál es la clave del trabajo en equipo?", options: ["Competir", "Trabajar solo", "Comunicación y objetivos compartidos", "Decisiones unilaterales"], correctAnswer: 2, explanation: "Se basa en la comunicación transparente y el compromiso compartido."),
         ],
       ),
       PathNode(
-        id: 4,
-        title: "Liderazgo",
-        description: "Desarrolla habilidades de liderazgo, toma de decisiones y motivación de equipos.",
+        id: 4, title: "Liderazgo",
+        description: "Desarrolla liderazgo, toma de decisiones y motivación de equipos.",
         status: NodeStatus.locked,
+        educationalContent: EducationalContent(
+          title: "Liderazgo y Desarrollo de Equipos",
+          content: "El liderazgo efectivo no es sobre autoridad, sino sobre inspirar, guiar y empoderar. Un buen líder escucha, delega, y crea un ambiente de crecimiento. La inteligencia emocional es fundamental.",
+          keyPoints: ["Es inspirar y empoderar", "Los buenos líderes escuchan", "La inteligencia emocional es fundamental", "Saber delegar es clave"],
+        ),
         questions: [
-          QuizQuestion(
-            question: "¿Qué caracteriza a un buen líder?",
-            options: [
-              "Controlar todos los aspectos del trabajo",
-              "Inspirar y empoderar a otros",
-              "Tomar todas las decisiones solo",
-              "Evitar dar feedback"
-            ],
-            correctAnswer: 1,
-          ),
+          QuizQuestion(question: "¿Qué caracteriza a un buen líder?", options: ["Controlar todo", "Inspirar y empoderar", "Decidir solo", "No dar feedback"], correctAnswer: 1, explanation: "Inspira confianza y empodera a su equipo."),
         ],
       ),
       PathNode(
-        id: 5,
-        title: "Meta Final",
-        description: "¡Felicitaciones! Has completado tu ruta de desarrollo de habilidades blandas.",
+        id: 5, title: "Meta Final",
+        description: "¡Felicidades! Has completado tu ruta de desarrollo.",
         status: NodeStatus.locked,
-        questions: [], // No hay quiz para la meta final
+        educationalContent: EducationalContent(
+          title: "Celebrando tu Éxito",
+          content: "Has completado exitosamente tu ruta de desarrollo. Las competencias adquiridas te servirán en cualquier entorno profesional. Recuerda que el desarrollo de habilidades es un proceso continuo.",
+          keyPoints: ["Has completado tu desarrollo", "Son competencias aplicables en cualquier entorno", "El desarrollo es un proceso continuo", "Aplica lo aprendido"],
+        ),
+        questions: [],
       ),
     ];
+    _userStats = UserStats(); // Reinicia estadísticas también
   }
 
-  // Completar un nodo y actualizar el progreso
-  void completeNode(int nodeId, bool quizPassed) {
-    final nodeIndex = _nodes.indexWhere((node) => node.id == nodeId);
-    if (nodeIndex != -1) {
-      if (quizPassed) {
-        _nodes[nodeIndex].status = NodeStatus.completed;
-        _unlockNextNode(nodeIndex);
-      }
-      // Si no pasó el quiz, el nodo mantiene su estado actual
+  Future<void> markContentAsViewed(int nodeId) async {
+    await _ensureLoaded();
+    final nodeIndex = _nodes.indexWhere((n) => n.id == nodeId);
+    if (nodeIndex != -1 && !_nodes[nodeIndex].contentViewed) {
+      _nodes[nodeIndex].contentViewed = true;
+      _userStats.totalPoints += ScoreSystem.CONTENT_READING_POINTS;
+      _userStats.lastActivity = DateTime.now();
+      await saveProgress();
     }
   }
 
-  // Desbloquear el siguiente nodo
-  void _unlockNextNode(int currentNodeIndex) {
-    if (currentNodeIndex + 1 < _nodes.length) {
-      final nextNode = _nodes[currentNodeIndex + 1];
+  Future<void> completeNode(int nodeId, bool quizPassed, {int? quizScore}) async {
+    await _ensureLoaded();
+    final nodeIndex = _nodes.indexWhere((n) => n.id == nodeId);
+    if (nodeIndex != -1 && _nodes[nodeIndex].status != NodeStatus.completed) {
+      if (quizPassed) {
+        _nodes[nodeIndex].status = NodeStatus.completed;
+        _nodes[nodeIndex].completedAt = DateTime.now();
+        _nodes[nodeIndex].lastQuizScore = quizScore;
+
+        _userStats.totalPoints += ScoreSystem.NODE_COMPLETION_POINTS;
+        if (quizScore != null) {
+          _userStats.totalPoints += ScoreSystem.calculateQuizScore(
+              (quizScore / 100 * _nodes[nodeIndex].questions.length).round(),
+              _nodes[nodeIndex].questions.length);
+        }
+        _userStats.totalNodesCompleted++;
+        _userStats.lastActivity = DateTime.now();
+
+        final skillName = _nodes[nodeIndex].title;
+        _userStats.skillScores[skillName] = quizScore ?? 0;
+
+        _unlockNextNode(nodeIndex);
+      }
+      await saveProgress();
+    }
+  }
+
+  void _unlockNextNode(int currentIndex) {
+    if (currentIndex + 1 < _nodes.length) {
+      final nextNode = _nodes[currentIndex + 1];
       if (nextNode.status == NodeStatus.locked) {
         nextNode.status = NodeStatus.active;
       }
     }
   }
 
-  // Obtener el progreso total (porcentaje completado)
   double get progressPercentage {
-    final completedNodes = _nodes.where((node) => node.status == NodeStatus.completed).length;
-    return completedNodes / _nodes.length;
+    if (_nodes.isEmpty) return 0.0;
+    final totalLearnableNodes = _nodes.length - 1;
+    if (totalLearnableNodes <= 0) return 0.0;
+    final completedNodes = _nodes.where((n) => n.status == NodeStatus.completed).length;
+    return completedNodes / totalLearnableNodes;
   }
 
-  // Obtener cantidad de nodos completados
-  int get completedNodesCount {
-    return _nodes.where((node) => node.status == NodeStatus.completed).length;
+  int get completedNodesCount => _nodes.where((n) => n.status == NodeStatus.completed).length;
+  int get totalLearnableNodes => _nodes.length - 1;
+
+  Future<void> resetProgress() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    _isLoaded = false;
+    await _ensureLoaded();
   }
 }
 
-// Pantalla principal - Home con el camino de aprendizaje
+// --- Widgets de la Interfaz de Usuario ---
+
+// Pantalla de Inicio
 class HomeScreen extends StatefulWidget {
+  final ProgressManager progressManager;
+  HomeScreen({required this.progressManager});
   @override
   _HomeScreenState createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final ProgressManager _progressManager = ProgressManager();
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await widget.progressManager.loadProgress();
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _reset() async {
+    await widget.progressManager.resetProgress();
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     return Scaffold(
       backgroundColor: Color(0xFFF5F7FA),
       appBar: AppBar(
@@ -342,18 +514,39 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 0,
         title: Row(
           children: [
-            Icon(Icons.info_outline, color: Colors.blue[700]),
+            GestureDetector(
+              onLongPress: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text("Reiniciar Progreso"),
+                    content: Text("¿Estás seguro de que quieres borrar todo tu progreso? Esta acción no se puede deshacer."),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context), child: Text("Cancelar")),
+                      TextButton(onPressed: () {
+                        _reset();
+                        Navigator.pop(context);
+                      }, child: Text("Reiniciar")),
+                    ],
+                  ),
+                );
+              },
+              child: Icon(Icons.info_outline, color: Colors.blue[700]),
+            ),
             SizedBox(width: 8),
-            Text(
-              'Add your LinkedIn!',
-              style: TextStyle(
-                color: Colors.blue[700],
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
+            Text('¡Añade tu LinkedIn!', style: TextStyle(color: Colors.blue[700], fontSize: 18, fontWeight: FontWeight.w600)),
+            Spacer(),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(color: Colors.amber[700], borderRadius: BorderRadius.circular(12)),
+              child: Row(
+                children: [
+                  Icon(Icons.star, color: Colors.white, size: 16),
+                  SizedBox(width: 4),
+                  Text('${widget.progressManager.userStats.totalPoints}', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ],
               ),
             ),
-            Spacer(),
-            Icon(Icons.notifications_outlined, color: Colors.blue[700]),
           ],
         ),
       ),
@@ -361,7 +554,6 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           Column(
             children: [
-              // Barra de progreso
               Container(
                 margin: EdgeInsets.all(20),
                 child: Column(
@@ -369,30 +561,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Tu Progreso',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[700],
-                          ),
-                        ),
-                        Text(
-                          '${_progressManager.completedNodesCount}/${_progressManager.nodes.length}',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue[700],
-                          ),
-                        ),
+                        Text('Tu Progreso', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey[700])),
+                        Text('${widget.progressManager.completedNodesCount}/${widget.progressManager.totalLearnableNodes}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blue[700])),
                       ],
                     ),
                     SizedBox(height: 8),
                     LinearProgressIndicator(
-                      value: _progressManager.progressPercentage,
+                      value: widget.progressManager.progressPercentage,
                       backgroundColor: Colors.grey[300],
                       valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[600]!),
-                      minHeight: 6,
+                      minHeight: 8,
                     ),
                   ],
                 ),
@@ -402,22 +580,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 40),
                     child: LearningPath(
-                      progressManager: _progressManager,
-                      onNodeCompleted: () {
-                        setState(() {}); // Actualizar UI cuando se complete un nodo
-                      },
+                      progressManager: widget.progressManager,
+                      onNodeCompleted: () => setState(() {}),
                     ),
                   ),
                 ),
               ),
             ],
           ),
-          // Planta en la esquina inferior derecha
-          Positioned(
-            bottom: 100,
-            right: 20,
-            child: PlantWidget(),
-          ),
+          Positioned(bottom: 20, right: 20, child: PlantWidget(progressManager: widget.progressManager)),
         ],
       ),
     );
@@ -434,7 +605,6 @@ class LearningPath extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nodes = progressManager.nodes;
-
     return Column(
       children: [
         SizedBox(height: 20),
@@ -442,30 +612,18 @@ class LearningPath extends StatelessWidget {
           int index = entry.key;
           PathNode node = entry.value;
           bool isLast = index == nodes.length - 1;
-
           return Column(
             children: [
               PathNodeWidget(
                 node: node,
                 onTap: () {
                   if (node.isClickable) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => NodeDetailScreen(
-                          node: node,
-                          progressManager: progressManager,
-                          onNodeCompleted: onNodeCompleted,
-                        ),
-                      ),
-                    );
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (context) => NodeDetailScreen(node: node, progressManager: progressManager, onNodeCompleted: onNodeCompleted),
+                    )).then((_) => onNodeCompleted());
                   } else {
-                    // Mostrar mensaje para nodos bloqueados
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Completa los nodos anteriores para desbloquear este.'),
-                        backgroundColor: Colors.orange,
-                      ),
+                      SnackBar(content: Text('Completa los nodos anteriores para desbloquear este.'), backgroundColor: Colors.orange),
                     );
                   }
                 },
@@ -474,13 +632,13 @@ class LearningPath extends StatelessWidget {
             ],
           );
         }).toList(),
-        SizedBox(height: 100), // Espacio para la navegación inferior
+        SizedBox(height: 100),
       ],
     );
   }
 }
 
-// Widget individual del nodo
+// Widget de un nodo individual
 class PathNodeWidget extends StatelessWidget {
   final PathNode node;
   final VoidCallback onTap;
@@ -494,25 +652,13 @@ class PathNodeWidget extends StatelessWidget {
       child: Column(
         children: [
           Container(
-            width: 80,
-            height: 80,
+            width: 80, height: 80,
             decoration: BoxDecoration(
               color: node.backgroundColor,
               shape: BoxShape.circle,
-              boxShadow: node.isClickable ? [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  spreadRadius: 2,
-                  blurRadius: 8,
-                  offset: Offset(0, 4),
-                ),
-              ] : null,
+              boxShadow: node.isClickable ? [BoxShadow(color: Colors.black.withOpacity(0.1), spreadRadius: 2, blurRadius: 8, offset: Offset(0, 4))] : null,
             ),
-            child: Icon(
-              node.icon,
-              color: node.iconColor,
-              size: 32,
-            ),
+            child: Icon(node.icon, color: node.iconColor, size: 32),
           ),
           SizedBox(height: 8),
           Container(
@@ -520,11 +666,7 @@ class PathNodeWidget extends StatelessWidget {
             child: Text(
               node.title,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: node.isClickable ? Colors.grey[800] : Colors.grey[500],
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: node.isClickable ? Colors.grey[800] : Colors.grey[500]),
             ),
           ),
         ],
@@ -536,26 +678,17 @@ class PathNodeWidget extends StatelessWidget {
 // Conector entre nodos
 class PathConnector extends StatelessWidget {
   final bool isActive;
-
   PathConnector({required this.isActive});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 4,
-      height: 60,
+      width: 4, height: 60,
       margin: EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: isActive ? [
-            Colors.blue[400]!,
-            Colors.blue[600]!,
-          ] : [
-            Colors.grey[300]!,
-            Colors.grey[400]!,
-          ],
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: isActive ? [Colors.blue[400]!, Colors.blue[600]!] : [Colors.grey[300]!, Colors.grey[400]!],
         ),
         borderRadius: BorderRadius.circular(2),
       ),
@@ -563,231 +696,247 @@ class PathConnector extends StatelessWidget {
   }
 }
 
-// Widget de la planta (gamificación)
+// Widget de la planta (Gamificación)
 class PlantWidget extends StatelessWidget {
+  final ProgressManager progressManager;
+  PlantWidget({required this.progressManager});
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 60,
-      height: 60,
-      decoration: BoxDecoration(
-        color: Colors.blue[700],
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            spreadRadius: 2,
-            blurRadius: 8,
-            offset: Offset(0, 4),
+    final totalPoints = progressManager.userStats.totalPoints;
+    IconData plantIcon;
+    Color plantColor;
+
+    if (totalPoints >= 500) {
+      plantIcon = Icons.local_florist;
+      plantColor = Colors.pinkAccent;
+    } else if (totalPoints >= 200) {
+      plantIcon = Icons.eco;
+      plantColor = Colors.green[600]!;
+    } else if (totalPoints >= 50) {
+      plantIcon = Icons.grass;
+      plantColor = Colors.lightGreen;
+    } else {
+      plantIcon = Icons.energy_savings_leaf;
+      plantColor = Colors.green[300]!;
+    }
+
+    return GestureDetector(
+      onTap: () {
+        showDialog(context: context, builder: (context) => AlertDialog(
+          title: Row(children: [Icon(plantIcon, color: plantColor), SizedBox(width: 8), Text('Mi Planta')]),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Estado: ${_getPlantStatus(totalPoints)}'),
+              SizedBox(height: 8),
+              Text('Puntos totales: $totalPoints'),
+              SizedBox(height: 12),
+              LinearProgressIndicator(value: (totalPoints % 200) / 200.0, backgroundColor: Colors.grey[300], valueColor: AlwaysStoppedAnimation<Color>(plantColor)),
+              SizedBox(height: 4),
+              Text('Siguiente nivel en ${200 - (totalPoints % 200)} puntos', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+            ],
           ),
-        ],
-      ),
-      child: Icon(
-        Icons.eco,
-        color: Colors.white,
-        size: 28,
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text('Cerrar'))],
+        ));
+      },
+      child: Container(
+        width: 60, height: 60,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: plantColor, width: 3),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), spreadRadius: 2, blurRadius: 8, offset: Offset(0, 4))],
+        ),
+        child: Icon(plantIcon, color: plantColor, size: 28),
       ),
     );
   }
+
+  String _getPlantStatus(int points) {
+    if (points >= 500) return '¡En plena floración!';
+    if (points >= 200) return 'Creciendo fuerte';
+    if (points >= 50) return 'Brotando';
+    return 'Germinando';
+  }
 }
 
-// Pantalla de detalle del nodo
-class NodeDetailScreen extends StatelessWidget {
+// Pantalla de Detalle del Nodo (Contenido Educativo)
+class NodeDetailScreen extends StatefulWidget {
   final PathNode node;
   final ProgressManager progressManager;
   final VoidCallback onNodeCompleted;
 
-  NodeDetailScreen({
-    required this.node,
-    required this.progressManager,
-    required this.onNodeCompleted,
-  });
+  NodeDetailScreen({required this.node, required this.progressManager, required this.onNodeCompleted});
+  @override
+  _NodeDetailScreenState createState() => _NodeDetailScreenState();
+}
+
+class _NodeDetailScreenState extends State<NodeDetailScreen> {
+  final ScrollController _scrollController = ScrollController();
+  bool _isQuizButtonEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isQuizButtonEnabled = widget.node.contentViewed;
+
+    // Añadimos un listener para el scroll (para contenido largo)
+    _scrollController.addListener(_onScroll);
+
+    // NUEVO: Verificamos el tamaño del contenido después de que se renderice
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Si _isQuizButtonEnabled ya es true, no hacemos nada
+      if (_isQuizButtonEnabled) return;
+
+      // Si el contenido no necesita scroll (maxScrollExtent es 0),
+      // significa que ya es completamente visible.
+      if (_scrollController.position.maxScrollExtent == 0) {
+        // Habilitamos el botón y marcamos el contenido como visto
+        _enableButtonAndMarkAsRead();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  // Lógica para contenido largo
+  void _onScroll() {
+    if (_isQuizButtonEnabled) return; // Si ya está habilitado, no hacer nada más
+
+    // Si el usuario ha llegado casi al final del contenido
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent * 0.9) {
+      _enableButtonAndMarkAsRead();
+    }
+  }
+
+  // NUEVO: Centralizamos la lógica para habilitar el botón
+  void _enableButtonAndMarkAsRead() {
+    if (mounted && !_isQuizButtonEnabled) {
+      setState(() {
+        _isQuizButtonEnabled = true;
+      });
+      widget.progressManager.markContentAsViewed(widget.node.id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('¡+${ScoreSystem.CONTENT_READING_POINTS} puntos por leer!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  // El resto del código de _NodeDetailScreenState (build, _buildActiveNodeScreen, etc.)
+  // permanece exactamente igual.
 
   @override
   Widget build(BuildContext context) {
-    // Si el nodo está completado, mostrar resumen
-    if (node.status == NodeStatus.completed) {
+    if (widget.node.status == NodeStatus.completed) {
       return _buildCompletedNodeScreen(context);
     }
-
-    // Si el nodo está activo o es el primero, mostrar contenido
     return _buildActiveNodeScreen(context);
   }
 
-  Widget _buildCompletedNodeScreen(BuildContext context) {
+  Widget _buildActiveNodeScreen(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(node.title),
-        backgroundColor: Colors.green[600],
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
+      appBar: AppBar(title: Text(widget.node.title), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
+      body: SingleChildScrollView(
+        controller: _scrollController,
         padding: EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(widget.node.educationalContent.title, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            Text(widget.node.educationalContent.content, style: TextStyle(fontSize: 16, height: 1.6)),
+            SizedBox(height: 24),
             Container(
-              width: double.infinity,
               padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.green[200]!),
-              ),
-              child: Row(
+              decoration: BoxDecoration(color: Colors.blue[50], borderRadius: BorderRadius.circular(12)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.check_circle, color: Colors.green[600], size: 30),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      '¡Nodo Completado!',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green[700],
-                      ),
-                    ),
-                  ),
+                  Text('Puntos Clave:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue[700])),
+                  SizedBox(height: 12),
+                  ...widget.node.educationalContent.keyPoints.map((point) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: Row(children: [
+                      Icon(Icons.check_circle_outline, color: Colors.blue[600], size: 18),
+                      SizedBox(width: 8),
+                      Expanded(child: Text(point, style: TextStyle(fontSize: 14))),
+                    ]),
+                  )),
                 ],
               ),
             ),
-            SizedBox(height: 24),
-            Text(
-              'Resumen: ${node.title}',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 16),
-            Text(
-              node.description,
-              style: TextStyle(fontSize: 16, height: 1.5),
-            ),
-            SizedBox(height: 24),
-            Text(
-              'Has completado exitosamente este módulo. El contenido de esta habilidad ya forma parte de tu perfil profesional.',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey[600],
-                fontStyle: FontStyle.italic,
-              ),
-            ),
+            SizedBox(height: 100), // Espacio para el botón flotante
           ],
+        ),
+      ),
+      bottomNavigationBar: Container(
+        padding: EdgeInsets.all(20),
+        color: Colors.white,
+        child: ElevatedButton(
+          onPressed: _isQuizButtonEnabled ? () {
+            if (widget.node.questions.isNotEmpty) {
+              Navigator.push(context, MaterialPageRoute(
+                builder: (context) => QuizScreen(node: widget.node, progressManager: widget.progressManager, onNodeCompleted: widget.onNodeCompleted),
+              ));
+            } else {
+              widget.progressManager.completeNode(widget.node.id, true);
+              widget.onNodeCompleted();
+              Navigator.pop(context);
+            }
+          } : null,
+          child: Text(widget.node.questions.isNotEmpty ? 'Ir al Cuestionario' : 'Completar', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue[600],
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: Colors.grey[300], // Color cuando está deshabilitado
+            padding: EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildActiveNodeScreen(BuildContext context) {
+  Widget _buildCompletedNodeScreen(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(node.title),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
+      appBar: AppBar(title: Text(widget.node.title), backgroundColor: Colors.green[600], foregroundColor: Colors.white),
+      body: SingleChildScrollView(
         padding: EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (node.status == NodeStatus.first)
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(16),
-                margin: EdgeInsets.only(bottom: 20),
-                decoration: BoxDecoration(
-                  color: Colors.amber[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.amber[200]!),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.lightbulb, color: Colors.amber[600], size: 24),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        '¡Comienza tu ruta de aprendizaje!',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.amber[700],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            Text(
-              node.title,
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 16),
-            Text(
-              node.description,
-              style: TextStyle(fontSize: 16, height: 1.5),
-            ),
-            SizedBox(height: 32),
             Container(
               padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Contenido del Módulo:',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[700],
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '• Conceptos fundamentales\n'
-                        '• Ejemplos prácticos\n'
-                        '• Estrategias de aplicación\n'
-                        '• Casos de estudio',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-            Spacer(),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: node.questions.isNotEmpty ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => QuizScreen(
-                        node: node,
-                        progressManager: progressManager,
-                        onNodeCompleted: onNodeCompleted,
-                      ),
-                    ),
-                  );
-                } : () {
-                  // Para nodos sin quiz (como la meta final)
-                  progressManager.completeNode(node.id, true);
-                  onNodeCompleted();
-                  Navigator.pop(context);
-                },
-                child: Text(
-                  node.questions.isNotEmpty ? 'Comenzar Evaluación' : 'Completar',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[600],
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(25),
+              decoration: BoxDecoration(color: Colors.green[50], borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.green[200]!)),
+              child: Row(children: [
+                Icon(Icons.check_circle, color: Colors.green[600], size: 30),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('¡Nodo Completado!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green[700])),
+                      if (widget.node.lastQuizScore != null)
+                        Text('Puntuación: ${widget.node.lastQuizScore}%', style: TextStyle(fontSize: 16, color: Colors.green[600])),
+                    ],
                   ),
                 ),
-              ),
+              ]),
             ),
+            SizedBox(height: 24),
+            Text('Resumen: ${widget.node.educationalContent.title}', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            Text('Has completado exitosamente este módulo.', style: TextStyle(fontSize: 16, color: Colors.grey[600], fontStyle: FontStyle.italic)),
           ],
         ),
       ),
@@ -795,25 +944,20 @@ class NodeDetailScreen extends StatelessWidget {
   }
 }
 
-// Pantalla del quiz
+// Pantalla del Cuestionario
 class QuizScreen extends StatefulWidget {
   final PathNode node;
   final ProgressManager progressManager;
   final VoidCallback onNodeCompleted;
 
-  QuizScreen({
-    required this.node,
-    required this.progressManager,
-    required this.onNodeCompleted,
-  });
-
+  QuizScreen({required this.node, required this.progressManager, required this.onNodeCompleted});
   @override
   _QuizScreenState createState() => _QuizScreenState();
 }
 
 class _QuizScreenState extends State<QuizScreen> {
   int currentQuestionIndex = 0;
-  List<int?> selectedAnswers = [];
+  late List<int?> selectedAnswers;
   bool quizCompleted = false;
   int correctAnswers = 0;
 
@@ -831,42 +975,27 @@ class _QuizScreenState extends State<QuizScreen> {
 
   void nextQuestion() {
     if (currentQuestionIndex < widget.node.questions.length - 1) {
-      setState(() {
-        currentQuestionIndex++;
-      });
+      setState(() => currentQuestionIndex++);
     } else {
       completeQuiz();
     }
   }
 
-  void previousQuestion() {
-    if (currentQuestionIndex > 0) {
-      setState(() {
-        currentQuestionIndex--;
-      });
-    }
-  }
-
   void completeQuiz() {
-    // Calcular respuestas correctas
     correctAnswers = 0;
     for (int i = 0; i < widget.node.questions.length; i++) {
       if (selectedAnswers[i] == widget.node.questions[i].correctAnswer) {
         correctAnswers++;
       }
     }
-
-    setState(() {
-      quizCompleted = true;
-    });
-
-    // Determinar si pasó el quiz (necesita al menos 70% correcto)
     double percentage = correctAnswers / widget.node.questions.length;
     bool passed = percentage >= 0.7;
+    int quizScore = (percentage * 100).round();
 
-    // Actualizar el progreso
-    widget.progressManager.completeNode(widget.node.id, passed);
+    widget.progressManager.completeNode(widget.node.id, passed, quizScore: quizScore);
     widget.onNodeCompleted();
+
+    setState(() => quizCompleted = true);
   }
 
   @override
@@ -874,70 +1003,22 @@ class _QuizScreenState extends State<QuizScreen> {
     if (quizCompleted) {
       return _buildQuizResultScreen();
     }
-
     final question = widget.node.questions[currentQuestionIndex];
-    final progress = (currentQuestionIndex + 1) / widget.node.questions.length;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Quiz: ${widget.node.title}'),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: Text('Quiz: ${widget.node.title}'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
       body: Padding(
         padding: EdgeInsets.all(20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Barra de progreso del quiz
-            Row(
-              children: [
-                Text(
-                  'Pregunta ${currentQuestionIndex + 1} de ${widget.node.questions.length}',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                Spacer(),
-                Text(
-                  '${((progress) * 100).round()}%',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.blue[700],
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: progress,
-              backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[600]!),
-              minHeight: 6,
-            ),
+            Text('Pregunta ${currentQuestionIndex + 1} de ${widget.node.questions.length}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey[600])),
             SizedBox(height: 32),
-
-            // Pregunta
-            Text(
-              question.question,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                height: 1.3,
-              ),
-            ),
+            Text(question.question, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             SizedBox(height: 24),
-
-            // Opciones
             Expanded(
               child: ListView.builder(
                 itemCount: question.options.length,
                 itemBuilder: (context, index) {
                   final isSelected = selectedAnswers[currentQuestionIndex] == index;
-
                   return Container(
                     margin: EdgeInsets.only(bottom: 12),
                     child: InkWell(
@@ -946,84 +1027,28 @@ class _QuizScreenState extends State<QuizScreen> {
                         padding: EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: isSelected ? Colors.blue[50] : Colors.white,
-                          border: Border.all(
-                            color: isSelected ? Colors.blue[600]! : Colors.grey[300]!,
-                            width: 2,
-                          ),
+                          border: Border.all(color: isSelected ? Colors.blue[600]! : Colors.grey[300]!, width: 2),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: isSelected ? Colors.blue[600] : Colors.transparent,
-                                border: Border.all(
-                                  color: isSelected ? Colors.blue[600]! : Colors.grey[400]!,
-                                  width: 2,
-                                ),
-                              ),
-                              child: isSelected
-                                  ? Icon(Icons.check, color: Colors.white, size: 16)
-                                  : null,
-                            ),
-                            SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                question.options[index],
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                        child: Row(children: [
+                          Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked, color: isSelected ? Colors.blue[600]! : Colors.grey[400]!),
+                          SizedBox(width: 12),
+                          Expanded(child: Text(question.options[index], style: TextStyle(fontSize: 16))),
+                        ]),
                       ),
                     ),
                   );
                 },
               ),
             ),
-
-            // Botones de navegación
-            Row(
-              children: [
-                if (currentQuestionIndex > 0)
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: previousQuestion,
-                      child: Text('Anterior'),
-                      style: OutlinedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        side: BorderSide(color: Colors.blue[600]!),
-                      ),
-                    ),
-                  ),
-                if (currentQuestionIndex > 0) SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: selectedAnswers[currentQuestionIndex] != null
-                        ? nextQuestion
-                        : null,
-                    child: Text(
-                      currentQuestionIndex == widget.node.questions.length - 1
-                          ? 'Finalizar Quiz'
-                          : 'Siguiente',
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[600],
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: selectedAnswers[currentQuestionIndex] != null ? nextQuestion : null,
+                child: Text(currentQuestionIndex == widget.node.questions.length - 1 ? 'Finalizar Cuestionario' : 'Siguiente'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
+              ),
             ),
           ],
         ),
@@ -1034,523 +1059,162 @@ class _QuizScreenState extends State<QuizScreen> {
   Widget _buildQuizResultScreen() {
     double percentage = correctAnswers / widget.node.questions.length;
     bool passed = percentage >= 0.7;
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Resultados del Quiz'),
-        backgroundColor: passed ? Colors.green[600] : Colors.red[600],
-        foregroundColor: Colors.white,
-        automaticallyImplyLeading: false, // Ocultar botón de retroceso
-      ),
-      body: Padding(
-        padding: EdgeInsets.all(20),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                color: passed ? Colors.green[600] : Colors.red[600],
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                passed ? Icons.check : Icons.close,
-                color: Colors.white,
-                size: 60,
-              ),
-            ),
-            SizedBox(height: 24),
-            Text(
-              passed ? '¡Felicitaciones!' : '¡Inténtalo de nuevo!',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: passed ? Colors.green[700] : Colors.red[700],
-              ),
-            ),
-            SizedBox(height: 16),
-            Text(
-              passed
-                  ? 'Has completado exitosamente el módulo de ${widget.node.title}'
-                  : 'Necesitas al menos 70% para aprobar. ¡No te desanimes, puedes intentarlo nuevamente!',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                height: 1.4,
-                color: Colors.grey[600],
-              ),
-            ),
-            SizedBox(height: 24),
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  Column(
-                    children: [
-                      Text(
-                        '$correctAnswers',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green[600],
-                        ),
-                      ),
-                      Text('Correctas', style: TextStyle(color: Colors.grey[600])),
-                    ],
-                  ),
-                  Column(
-                    children: [
-                      Text(
-                        '${widget.node.questions.length - correctAnswers}',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red[600],
-                        ),
-                      ),
-                      Text('Incorrectas', style: TextStyle(color: Colors.grey[600])),
-                    ],
-                  ),
-                  Column(
-                    children: [
-                      Text(
-                        '${(percentage * 100).round()}%',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue[600],
-                        ),
-                      ),
-                      Text('Puntuación', style: TextStyle(color: Colors.grey[600])),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(height: 40),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: () {
-                  // Regresar a la pantalla principal
-                  Navigator.of(context).popUntil((route) => route.isFirst);
-                },
-                child: Text(
-                  passed ? 'Continuar Ruta' : 'Volver al Inicio',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: passed ? Colors.green[600] : Colors.blue[600],
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(25),
-                  ),
-                ),
-              ),
-            ),
-            if (!passed) ...[
-              SizedBox(height: 12),
+      appBar: AppBar(title: Text('Cuestionario Completo'), backgroundColor: passed ? Colors.green[600] : Colors.red[600], foregroundColor: Colors.white, automaticallyImplyLeading: false),
+      body: Center(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(passed ? Icons.check_circle_outline : Icons.highlight_off, color: passed ? Colors.green[600] : Colors.red[600], size: 80),
+              SizedBox(height: 24),
+              Text(passed ? '¡Felicitaciones!' : 'Sigue Intentando', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              SizedBox(height: 16),
+              Text('Tu puntuación: ${(percentage * 100).round()}%', style: TextStyle(fontSize: 20)),
+              SizedBox(height: 8),
+              Text(passed ? '¡Has aprobado y desbloqueado el siguiente nivel!' : 'Necesitas al menos 70% para aprobar.', textAlign: TextAlign.center),
+              SizedBox(height: 40),
               SizedBox(
                 width: double.infinity,
                 height: 50,
-                child: OutlinedButton(
+                child: ElevatedButton(
                   onPressed: () {
-                    // Reiniciar el quiz
-                    setState(() {
-                      currentQuestionIndex = 0;
-                      selectedAnswers = List.filled(widget.node.questions.length, null);
-                      quizCompleted = false;
-                      correctAnswers = 0;
-                    });
+                    // Cierra la pantalla del quiz y la de detalle del nodo, volviendo al home
+                    Navigator.of(context).popUntil((route) => route.isFirst);
                   },
-                  child: Text(
-                    'Intentar de Nuevo',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Colors.blue[600]!),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                  ),
+                  child: Text('Volver al Inicio'),
+                  style: ElevatedButton.styleFrom(backgroundColor: passed ? Colors.green[600] : Colors.blue[600], foregroundColor: Colors.white),
                 ),
               ),
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-// Pantallas placeholder para las otras secciones
+// --- Pantallas Adicionales (Placeholders y Mejoradas) ---
+
 class JobsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Jobs'),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.work, size: 64, color: Colors.grey[400]),
-            SizedBox(height: 16),
-            Text(
-              'Próximamente',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[600],
-              ),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Aquí encontrarás ofertas de trabajo\nrelevantes para tus habilidades',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[500]),
-            ),
-          ],
-        ),
-      ),
+      appBar: AppBar(title: Text('Empleos'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
+      body: Center(child: Text('Próximamente: Vacantes relevantes')),
     );
   }
 }
 
 class LeaderboardScreen extends StatelessWidget {
+  final ProgressManager progressManager;
+  LeaderboardScreen({required this.progressManager});
+
   @override
   Widget build(BuildContext context) {
-    final ProgressManager progressManager = ProgressManager();
-
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Leaderboard'),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: Text('Ranking'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
       body: Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
-            // Estadísticas del usuario
             Container(
-              width: double.infinity,
               padding: EdgeInsets.all(20),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.blue[600]!, Colors.blue[800]!],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                gradient: LinearGradient(colors: [Colors.blue[600]!, Colors.blue[800]!]),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Column(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  Text(
-                    'Tu Progreso',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      Column(
-                        children: [
-                          Text(
-                            '${progressManager.completedNodesCount}',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Completados',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          Text(
-                            '${(progressManager.progressPercentage * 100).round()}%',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Progreso',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                      Column(
-                        children: [
-                          Text(
-                            '${progressManager.completedNodesCount * 50}',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Puntos',
-                            style: TextStyle(color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                  _buildStat('Puntos', '${progressManager.userStats.totalPoints}', Icons.star),
+                  _buildStat('Posición', '#1', Icons.emoji_events), // Placeholder
+                  _buildStat('Racha', '${progressManager.userStats.streak} Días', Icons.local_fire_department), // Placeholder
                 ],
               ),
             ),
             SizedBox(height: 24),
-            Expanded(
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.emoji_events, size: 64, color: Colors.grey[400]),
-                    SizedBox(height: 16),
-                    Text(
-                      'Próximamente',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Aquí podrás comparar tu progreso\ncon otros usuarios',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey[500]),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            Text("Tabla de Clasificación (Próximamente)", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStat(String label, String value, IconData icon) {
+    return Column(
+      children: [
+        Icon(icon, color: Colors.white, size: 28),
+        SizedBox(height: 8),
+        Text(value, style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+        Text(label, style: TextStyle(color: Colors.white70)),
+      ],
     );
   }
 }
 
 class ProfileScreen extends StatelessWidget {
+  final ProgressManager progressManager;
+  ProfileScreen({required this.progressManager});
+
   @override
   Widget build(BuildContext context) {
-    final ProgressManager progressManager = ProgressManager();
-    final completedNodes = progressManager.nodes
-        .where((node) => node.status == NodeStatus.completed)
-        .toList();
+    final stats = progressManager.userStats;
+    final progress = progressManager.progressPercentage;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Profile'),
-        backgroundColor: Colors.blue[600],
-        foregroundColor: Colors.white,
-      ),
+      appBar: AppBar(title: Text('Perfil'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
       body: SingleChildScrollView(
         padding: EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Información del usuario
             Center(
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 50,
-                    backgroundColor: Colors.blue[600],
-                    child: Icon(Icons.person, size: 50, color: Colors.white),
-                  ),
+                  CircleAvatar(radius: 50, backgroundColor: Colors.blue[600], child: Icon(Icons.person, size: 50, color: Colors.white)),
                   SizedBox(height: 16),
-                  Text(
-                    'Usuario Demo',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  Text(
-                    'Desarrollando habilidades blandas',
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 16,
-                    ),
-                  ),
+                  Text('Candidato Aspirante', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
             SizedBox(height: 32),
-
-            // Estadísticas rápidas
-            Row(
-              children: [
-                Expanded(
-                  child: _buildStatCard(
-                    'Nodos Completados',
-                    '${progressManager.completedNodesCount}',
-                    Icons.check_circle,
-                    Colors.green,
-                  ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: _buildStatCard(
-                    'Progreso Total',
-                    '${(progressManager.progressPercentage * 100).round()}%',
-                    Icons.trending_up,
-                    Colors.blue,
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 24),
-
-            // Habilidades completadas
-            Text(
-              'Habilidades Desarrolladas',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            Text('Progreso General', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             SizedBox(height: 16),
-
-            if (completedNodes.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.grey[200]!),
-                ),
-                child: Column(
-                  children: [
-                    Icon(Icons.school, size: 48, color: Colors.grey[400]),
-                    SizedBox(height: 12),
-                    Text(
-                      'Aún no has completado ninguna habilidad',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 16,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      '¡Comienza tu ruta de aprendizaje!',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.blue[600],
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              )
+            Row(children: [
+              Expanded(child: LinearProgressIndicator(value: progress, minHeight: 10, backgroundColor: Colors.grey[300])),
+              SizedBox(width: 12),
+              Text('${(progress * 100).round()}%', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue[700])),
+            ]),
+            SizedBox(height: 32),
+            Text('Puntajes por Habilidad', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            if (stats.skillScores.isEmpty)
+              Text('Completa nodos para ver tus puntajes aquí.')
             else
-              ...completedNodes.map((node) => Container(
+              ...stats.skillScores.entries.map((entry) => Card(
                 margin: EdgeInsets.only(bottom: 12),
-                padding: EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green[200]!),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(entry.key, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                      Text('${entry.value}%', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _getScoreColor(entry.value))),
+                    ],
+                  ),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.green[600],
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(Icons.check, color: Colors.white),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            node.title,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                            ),
-                          ),
-                          Text(
-                            'Completado exitosamente',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.star, color: Colors.amber),
-                  ],
-                ),
-              )).toList(),
+              )),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
-    return Container(
-      padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 30),
-          SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.grey[600],
-            ),
-          ),
-        ],
-      ),
-    );
+  Color _getScoreColor(int score) {
+    if (score >= 90) return Colors.green;
+    if (score >= 70) return Colors.orange;
+    return Colors.red;
   }
 }
