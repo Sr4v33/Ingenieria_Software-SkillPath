@@ -29,6 +29,15 @@ dependencies:
   # Para manejo de rutas
   go_router: ^12.1.1
 
+  # Para manejo de peticiones
+  http: ^1.2.1
+
+  html: ^0.15.4
+
+  flutter_html: ^3.0.0-beta.2
+
+  url_launcher: ^6.2.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

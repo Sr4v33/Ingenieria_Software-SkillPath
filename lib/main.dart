@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'job_vacancy.dart';
+import 'job_service.dart';
+import 'job_detail_screen.dart';
 
 void main() {
   runApp(SkillsPathApp());
@@ -785,7 +788,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
     // Añadimos un listener para el scroll (para contenido largo)
     _scrollController.addListener(_onScroll);
 
-    // NUEVO: Verificamos el tamaño del contenido después de que se renderice
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Si _isQuizButtonEnabled ya es true, no hacemos nada
       if (_isQuizButtonEnabled) return;
@@ -816,7 +818,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
     }
   }
 
-  // NUEVO: Centralizamos la lógica para habilitar el botón
   void _enableButtonAndMarkAsRead() {
     if (mounted && !_isQuizButtonEnabled) {
       setState(() {
@@ -831,9 +832,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
       );
     }
   }
-
-  // El resto del código de _NodeDetailScreenState (build, _buildActiveNodeScreen, etc.)
-  // permanece exactamente igual.
 
   @override
   Widget build(BuildContext context) {
@@ -1095,14 +1093,78 @@ class _QuizScreenState extends State<QuizScreen> {
   }
 }
 
-// --- Pantallas Adicionales (Placeholders y Mejoradas) ---
+class JobsScreen extends StatefulWidget {
+  @override
+  _JobsScreenState createState() => _JobsScreenState();
+}
 
-class JobsScreen extends StatelessWidget {
+class _JobsScreenState extends State<JobsScreen> {
+  late Future<List<JobVacancy>> _vacanciesFuture;
+  final JobService _jobService = JobService();
+
+  @override
+  void initState() {
+    super.initState();
+    _vacanciesFuture = _jobService.fetchVacancies();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Empleos'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-      body: Center(child: Text('Próximamente: Vacantes relevantes')),
+      appBar: AppBar(
+        title: Text('Vacantes Disponibles'),
+        backgroundColor: Colors.blue[600],
+        foregroundColor: Colors.white,
+      ),
+      body: FutureBuilder<List<JobVacancy>>(
+        future: _vacanciesFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return Center(child: Text('No se encontraron vacantes.'));
+          }
+
+          final vacancies = snapshot.data!;
+          return ListView.builder(
+            itemCount: vacancies.length,
+            itemBuilder: (context, index) {
+              final vacancy = vacancies[index];
+              return Card(
+                margin: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                elevation: 3,
+                child: ListTile(
+                  contentPadding: EdgeInsets.all(16),
+                  leading: Icon(Icons.work, color: Colors.blue[700]),
+                  title: Text(vacancy.title, style: TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(height: 5),
+                      Text(vacancy.company, style: TextStyle(color: Colors.grey[800])),
+                      SizedBox(height: 5),
+                      Text(vacancy.location),
+                      SizedBox(height: 8),
+                      Text(vacancy.salary, style: TextStyle(fontWeight: FontWeight.w500, color: Colors.green[700])),
+                    ],
+                  ),
+                  onTap: () {
+                    // HUF25: Navegación a la pantalla de detalles
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => JobDetailScreen(vacancy: vacancy),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
