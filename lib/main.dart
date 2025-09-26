@@ -1164,54 +1164,241 @@ class ProfileScreen extends StatelessWidget {
     final progress = progressManager.progressPercentage;
 
     return Scaffold(
-      appBar: AppBar(title: Text('Perfil'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
+      appBar: AppBar(
+        title: Text('Perfil'),
+        backgroundColor: Colors.blue[600],
+        foregroundColor: Colors.white,
+      ),
       body: SingleChildScrollView(
         padding: EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // --- Sección de Información del Usuario ---
             Center(
               child: Column(
                 children: [
-                  CircleAvatar(radius: 50, backgroundColor: Colors.blue[600], child: Icon(Icons.person, size: 50, color: Colors.white)),
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: Colors.blue[600],
+                    child: Icon(Icons.person, size: 50, color: Colors.white),
+                  ),
                   SizedBox(height: 16),
-                  Text('Candidato Aspirante', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text(
+                    'Candidato Aspirante',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    'Desarrollando habilidades blandas',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 16,
+                    ),
+                  ),
                 ],
               ),
             ),
             SizedBox(height: 32),
-            Text('Progreso General', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            SizedBox(height: 16),
-            Row(children: [
-              Expanded(child: LinearProgressIndicator(value: progress, minHeight: 10, backgroundColor: Colors.grey[300])),
-              SizedBox(width: 12),
-              Text('${(progress * 100).round()}%', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue[700])),
-            ]),
-            SizedBox(height: 32),
-            Text('Puntajes por Habilidad', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            SizedBox(height: 16),
-            if (stats.skillScores.isEmpty)
-              Text('Completa nodos para ver tus puntajes aquí.')
-            else
-              ...stats.skillScores.entries.map((entry) => Card(
-                margin: EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(entry.key, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-                      Text('${entry.value}%', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _getScoreColor(entry.value))),
-                    ],
+
+            // --- Estadísticas rápidas ---
+            Row(
+              children: [
+                Expanded(
+                  child: _buildStatCard(
+                    'Nodos Completados',
+                    '${progressManager.completedNodesCount}',
+                    Icons.check_circle,
+                    Colors.green,
                   ),
                 ),
-              )),
+                SizedBox(width: 12),
+                Expanded(
+                  // NUEVO: Se utiliza el nuevo widget para la barra de progreso
+                  child: _buildProgressStatCard(
+                    'Progreso Total',
+                    progress, // Se pasa el valor de progreso (ej. 0.5 para 50%)
+                    Icons.trending_up,
+                    Colors.blue,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 24),
+
+            // --- Puntajes por Habilidad ---
+            Text(
+              'Puntajes por Habilidad',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(height: 16),
+
+            if (stats.skillScores.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey[200]!),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.school, size: 48, color: Colors.grey[400]),
+                    SizedBox(height: 12),
+                    Text(
+                      'Aún no has completado ninguna habilidad',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...stats.skillScores.entries.map((entry) => Container(
+                margin: EdgeInsets.only(bottom: 12),
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _getScoreColor(entry.value).withOpacity(0.3)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.05),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                    )
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: _getScoreColor(entry.value),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.check, color: Colors.white),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        entry.key,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${entry.value}%',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: _getScoreColor(entry.value),
+                      ),
+                    ),
+                  ],
+                ),
+              )).toList(),
           ],
         ),
       ),
     );
   }
 
+  // --- Widget para las tarjetas de estadísticas (sin cambios) ---
+  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 30),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- NUEVO: Widget específico para la tarjeta de progreso ---
+  Widget _buildProgressStatCard(String title, double progress, IconData icon, Color color) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Icon(icon, color: color, size: 20),
+            ],
+          ),
+          SizedBox(height: 12),
+          Text(
+            '${(progress * 100).round()}%',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: color.withOpacity(0.3),
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- Lógica para colorear el puntaje (sin cambios) ---
   Color _getScoreColor(int score) {
     if (score >= 90) return Colors.green;
     if (score >= 70) return Colors.orange;
