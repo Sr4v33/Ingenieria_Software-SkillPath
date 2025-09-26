@@ -2,11 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
+
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
 import 'job_vacancy.dart';
 import 'job_service.dart';
 import 'job_detail_screen.dart';
+import 'auth_service.dart';
+import 'login_screen.dart';
 
-void main() {
+
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  await FirebaseAuth.instance.signOut();
+
   runApp(SkillsPathApp());
 }
 
@@ -19,8 +35,35 @@ class SkillsPathApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      home: MainScreen(),
+      // Usamos un Wrapper para decidir qué pantalla mostrar
+      home: AuthWrapper(),
       debugShowCheckedModeBanner: false,
+    );
+  }
+}
+
+class AuthWrapper extends StatelessWidget {
+  final AuthService _authService = AuthService();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: _authService.authStateChanges,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.active) {
+          final User? user = snapshot.data;
+
+          // --- CAMBIO AQUÍ ---
+          // Si no hay usuario, muestra la pantalla de Login.
+          // Si hay un usuario, muestra la pantalla principal.
+          return user == null ? LoginScreen() : MainScreen();
+
+        } else {
+          return Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+      },
     );
   }
 }

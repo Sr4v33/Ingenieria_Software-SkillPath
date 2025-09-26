@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "534686622957",
+    "project_id": "skillspath-8ee30",
+    "storage_bucket": "skillspath-8ee30.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:534686622957:android:67d6d6a3227e1507ea98e4",
+        "android_client_info": {
+          "package_name": "com.example.skills_path_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAvLSQd2FhCeOZXYX305w0SgRCXlD3Med4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
