@@ -27,10 +27,14 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
 
   // --- FUNCIÓN PARA EL BOTÓN "APLICAR" ---
   Future<void> _launchURL(String url) async {
+    // Imprime la URL en la consola para verificar que es correcta
+    print('Intentando abrir la URL: $url');
+
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
+      // Muestra un error más informativo
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo abrir el enlace: $url')),
       );
