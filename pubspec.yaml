@@ -48,6 +48,7 @@ dependencies:
   connectivity_plus: ^6.0.5   # Verificar conectividad
   internet_connection_checker: ^3.0.1
 dev_dependencies:
+  flutter_launcher_icons: ^0.13.1 # (O la versión más reciente)
   flutter_test:
     sdk: flutter
 
@@ -62,6 +63,12 @@ dev_dependencies:
 
 # Para información sobre la sección genérica de Yaml, ver la siguiente página:
 # https://dart.dev/tools/pub/pubspec
+
+
+flutter_launcher_icons:
+  android: true  # Generar íconos para Android
+  ios: true      # Generar íconos para iOS
+  image_path: "assets/icon/mi_icono.png" # Ruta a tu ícono principal
 
 # La siguiente sección es específica de Flutter.
 flutter:
